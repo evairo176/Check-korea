@@ -56,50 +56,10 @@ def generate_math_captcha() -> tuple[str, str, str]:
     return token, question, answer
 
 
-def generate_captcha_image(text: str) -> bytes:
-    """Generate a simple CAPTCHA image as SVG."""
-    # Generate noise lines
-    lines = ""
-    for _ in range(4):
-        x1 = random.randint(0, 180)
-        y1 = random.randint(0, 50)
-        x2 = random.randint(0, 180)
-        y2 = random.randint(0, 50)
-        color = f"#{random.randint(100,200):02x}{random.randint(100,200):02x}{random.randint(100,200):02x}"
-        lines += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{color}" stroke-width="1.5"/>'
-
-    # Generate noise dots
-    dots = ""
-    for _ in range(50):
-        cx = random.randint(0, 180)
-        cy = random.randint(0, 50)
-        r = random.randint(1, 2)
-        color = f"#{random.randint(100,200):02x}{random.randint(100,200):02x}{random.randint(100,200):02x}"
-        dots += f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}"/>'
-
-    # Generate text with random positions and rotations
-    chars = ""
-    for i, ch in enumerate(text):
-        x = 15 + i * 30 + random.randint(-3, 3)
-        y = 35 + random.randint(-5, 5)
-        rotation = random.randint(-15, 15)
-        color = f"#{random.randint(0,100):02x}{random.randint(0,100):02x}{random.randint(0,100):02x}"
-        chars += f'<text x="{x}" y="{y}" font-size="28" font-family="monospace" font-weight="bold" fill="{color}" transform="rotate({rotation},{x},{y})">{ch}</text>'
-
-    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="180" height="50" viewBox="0 0 180 50">
-  <rect width="180" height="50" fill="#1e293b" rx="8"/>
-  {lines}
-  {dots}
-  {chars}
-</svg>'''
-    return svg.encode('utf-8')
-
-
-def generate_captcha_token() -> tuple[str, str, str]:
-    """Generate math captcha and return (token, question, svg_bytes)."""
+def generate_captcha_token() -> tuple[str, str]:
+    """Generate math captcha and return (token, question)."""
     token, question, answer = generate_math_captcha()
-    svg = generate_captcha_image(question)
-    return token, question, svg
+    return token, question
 
 
 def verify_captcha(token: str, answer: str) -> bool:
@@ -227,7 +187,7 @@ async def index():
                     <button type="button" class="captcha-refresh" onclick="loadCaptcha()" title="Refresh captcha">↻</button>
                 </div>
                 <input type="hidden" id="captcha-token" value="">
-                <div class="field-hint">Selesaikan operasi matematika di atas</div>
+                <div class="field-hint">Selesaikan soal matematika di atas</div>
                 <div class="field-error" id="captcha-error"></div>
             </div>
             <div id="status"></div>
@@ -337,9 +297,9 @@ async def index():
             captchaToken = data.token;
             document.getElementById('captcha-token').value = data.token;
             
-            // Show SVG image
+            // Show question as plain text
             const imgContainer = document.getElementById('captcha-image');
-            imgContainer.innerHTML = atob(data.image);
+            imgContainer.innerHTML = '<span style="font-size:1.3rem;font-weight:bold;color:#e2e8f0;font-family:monospace">' + data.question + '</span>';
             
             document.getElementById('captcha-answer').value = '';
             clearError('captcha');
@@ -434,10 +394,8 @@ async def index():
 @app.get("/api/captcha")
 async def get_captcha():
     """Generate and return a new math captcha."""
-    token, question, svg = generate_captcha_token()
-    import base64
-    image_b64 = base64.b64encode(svg).decode('utf-8')
-    return {"token": token, "question": question, "image": image_b64}
+    token, question = generate_captcha_token()
+    return {"token": token, "question": question}
 
 
 @app.post("/api/check")

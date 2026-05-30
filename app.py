@@ -127,6 +127,25 @@ class CheckRequest(BaseModel):
     captcha_token: str
     captcha_answer: str
 
+    def validate_input(self) -> str | None:
+        """Validate input fields. Returns error message or None."""
+        import re
+        if not self.username or len(self.username.strip()) < 3:
+            return "NIK minimal 3 karakter"
+        if not re.match(r'^[a-zA-Z0-9_-]+$', self.username.strip()):
+            return "NIK mengandung karakter tidak valid"
+        if not self.password or len(self.password) < 4:
+            return "Password minimal 4 karakter"
+        if not self.birth or not re.match(r'^[0-9]{6}$', self.birth.strip()):
+            return "Format tanggal lahir harus 6 digit angka (DDMMYY)"
+        dd = int(self.birth[0:2])
+        mm = int(self.birth[2:4])
+        if dd < 1 or dd > 31:
+            return "Tanggal tidak valid (01-31)"
+        if mm < 1 or mm > 12:
+            return "Bulan tidak valid (01-12)"
+        return None
+
 
 class BulkCheckRequest(BaseModel):
     accounts: list[CheckRequest]
@@ -150,8 +169,12 @@ async def index():
         .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid #334155; }
         .form-group { margin-bottom: 1rem; }
         label { display: block; color: #94a3b8; font-size: 0.875rem; margin-bottom: 0.25rem; }
-        input { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 1rem; }
+        .field-hint { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
+        .field-error { font-size: 0.75rem; color: #f87171; margin-top: 0.25rem; display: none; }
+        input { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; font-size: 1rem; transition: border-color 0.2s; }
         input:focus { outline: none; border-color: #3b82f6; }
+        input.invalid { border-color: #f87171; }
+        input.valid { border-color: #22c55e; }
         button { width: 100%; padding: 0.75rem; background: linear-gradient(135deg, #3b82f6, #8b5cf6); border: none; border-radius: 8px; color: white; font-size: 1rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
         button:hover { opacity: 0.9; }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -162,8 +185,13 @@ async def index():
         .status.error { background: #7f1d1d; color: #f87171; }
         .captcha-group { display: flex; gap: 0.5rem; align-items: center; }
         .captcha-group input { flex: 1; }
+        .captcha-image { background: #1e293b; padding: 0.5rem; border-radius: 8px; border: 1px solid #334155; cursor: pointer; display: flex; align-items: center; justify-content: center; min-height: 50px; }
+        .captcha-image:hover { border-color: #3b82f6; }
+        .captcha-image svg { max-width: 100%; height: auto; }
         .captcha-refresh { background: none; border: 1px solid #334155; color: #94a3b8; padding: 0.5rem 0.75rem; border-radius: 8px; cursor: pointer; font-size: 1.2rem; width: auto; }
         .captcha-refresh:hover { background: #334155; }
+        .input-icon { position: relative; }
+        .input-icon .validation-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%; font-size: 1.1rem; }
     </style>
 </head>
 <body>
@@ -173,28 +201,37 @@ async def index():
         
         <div class="card">
             <div class="form-group">
-                <label>NIK / ID</label>
-                <input type="text" id="username" placeholder="Masukkan NIK">
+                <label for="username">NIK / ID</label>
+                <input type="text" id="username" placeholder="Masukkan NIK" autocomplete="off">
+                <div class="field-hint">Nomor identitas yang terdaftar di EPS</div>
+                <div class="field-error" id="username-error"></div>
             </div>
             <div class="form-group">
-                <label>Password</label>
+                <label for="password">Password</label>
                 <input type="password" id="password" placeholder="Masukkan Password">
+                <div class="field-error" id="password-error"></div>
             </div>
             <div class="form-group">
-                <label>Tanggal Lahir (DDMMYY)</label>
-                <input type="text" id="birth" placeholder="Contoh: 020216" maxlength="6">
+                <label for="birth">Tanggal Lahir (DDMMYY)</label>
+                <input type="text" id="birth" placeholder="Contoh: 020290 (2 Feb 1990)" maxlength="6" pattern="[0-9]{6}" inputmode="numeric">
+                <div class="field-hint">Format: 2 digit tanggal + 2 digit bulan + 2 digit tahun (DDMMYY)</div>
+                <div class="field-error" id="birth-error"></div>
             </div>
             <div class="form-group">
                 <label>Captcha</label>
-                <div class="captcha-group">
-                    <div id="captcha-question" style="background:#0f172a;padding:0.75rem;border-radius:8px;border:1px solid #334155;font-size:1.1rem;font-weight:bold;min-width:120px;text-align:center;">Loading...</div>
-                    <input type="text" id="captcha-answer" placeholder="Jawaban" maxlength="4" autocomplete="off">
-                    <button type="button" class="captcha-refresh" onclick="loadCaptcha()">↻</button>
+                <div class="captcha-image" id="captcha-image" onclick="loadCaptcha()" title="Klik untuk refresh captcha">
+                    <span style="color:#64748b">Loading captcha...</span>
+                </div>
+                <div class="captcha-group" style="margin-top: 0.5rem;">
+                    <input type="text" id="captcha-answer" placeholder="Jawaban (contoh: 15)" maxlength="5" autocomplete="off" inputmode="numeric">
+                    <button type="button" class="captcha-refresh" onclick="loadCaptcha()" title="Refresh captcha">↻</button>
                 </div>
                 <input type="hidden" id="captcha-token" value="">
+                <div class="field-hint">Selesaikan operasi matematika di atas</div>
+                <div class="field-error" id="captcha-error"></div>
             </div>
             <div id="status"></div>
-            <button onclick="checkStatus()">🔍 Cek Status</button>
+            <button onclick="checkStatus()" id="submit-btn">🔍 Cek Status</button>
         </div>
         
         <div class="card">
@@ -206,16 +243,109 @@ async def index():
     <script>
     let captchaToken = '';
     
+    // Validation helpers
+    function showError(fieldId, message) {
+        const el = document.getElementById(fieldId + '-error');
+        const input = document.getElementById(fieldId);
+        if (el) { el.textContent = message; el.style.display = 'block'; }
+        if (input) { input.classList.add('invalid'); input.classList.remove('valid'); }
+    }
+    
+    function clearError(fieldId) {
+        const el = document.getElementById(fieldId + '-error');
+        const input = document.getElementById(fieldId);
+        if (el) { el.textContent = ''; el.style.display = 'none'; }
+        if (input) { input.classList.remove('invalid'); }
+    }
+    
+    function markValid(fieldId) {
+        const input = document.getElementById(fieldId);
+        if (input) { input.classList.add('valid'); input.classList.remove('invalid'); }
+    }
+    
+    function validateUsername(val) {
+        if (!val) return 'NIK wajib diisi';
+        if (val.length < 3) return 'NIK minimal 3 karakter';
+        if (!/^[a-zA-Z0-9_-]+$/.test(val)) return 'NIK hanya boleh huruf, angka, - dan _';
+        return null;
+    }
+    
+    function validatePassword(val) {
+        if (!val) return 'Password wajib diisi';
+        if (val.length < 4) return 'Password minimal 4 karakter';
+        return null;
+    }
+    
+    function validateBirth(val) {
+        if (!val) return 'Tanggal lahir wajib diisi';
+        if (!/^[0-9]{6}$/.test(val)) return 'Format harus 6 digit angka (DDMMYY)';
+        const dd = parseInt(val.substring(0, 2));
+        const mm = parseInt(val.substring(2, 4));
+        const yy = parseInt(val.substring(4, 6));
+        if (dd < 1 || dd > 31) return 'Tanggal tidak valid (01-31)';
+        if (mm < 1 || mm > 12) return 'Bulan tidak valid (01-12)';
+        if (yy < 0 || yy > 99) return 'Tahun tidak valid (00-99)';
+        return null;
+    }
+    
+    function validateCaptcha(val) {
+        if (!val) return 'Jawaban captcha wajib diisi';
+        if (!/^[0-9]+$/.test(val)) return 'Jawaban harus berupa angka';
+        return null;
+    }
+    
+    // Real-time validation on blur
+    document.getElementById('username').addEventListener('blur', function() {
+        const err = validateUsername(this.value.trim());
+        if (err) showError('username', err);
+        else { clearError('username'); markValid('username'); }
+    });
+    
+    document.getElementById('password').addEventListener('blur', function() {
+        const err = validatePassword(this.value);
+        if (err) showError('password', err);
+        else { clearError('password'); markValid('password'); }
+    });
+    
+    document.getElementById('birth').addEventListener('input', function() {
+        // Only allow digits
+        this.value = this.value.replace(/[^0-9]/g, '');
+    });
+    
+    document.getElementById('birth').addEventListener('blur', function() {
+        const err = validateBirth(this.value.trim());
+        if (err) showError('birth', err);
+        else { clearError('birth'); markValid('birth'); }
+    });
+    
+    document.getElementById('captcha-answer').addEventListener('input', function() {
+        // Only allow digits
+        this.value = this.value.replace(/[^0-9]/g, '');
+    });
+    
+    // Allow Enter key to submit
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !document.getElementById('submit-btn').disabled) {
+            checkStatus();
+        }
+    });
+    
     async function loadCaptcha() {
         try {
             const resp = await fetch('/eps/api/captcha');
             const data = await resp.json();
             captchaToken = data.token;
             document.getElementById('captcha-token').value = data.token;
-            document.getElementById('captcha-question').textContent = data.question;
+            
+            // Show SVG image
+            const imgContainer = document.getElementById('captcha-image');
+            imgContainer.innerHTML = atob(data.image);
+            
             document.getElementById('captcha-answer').value = '';
+            clearError('captcha');
         } catch(e) {
             console.error('Failed to load captcha:', e);
+            document.getElementById('captcha-image').innerHTML = '<span style="color:#f87171">Gagal load captcha. Klik untuk retry.</span>';
         }
     }
     
@@ -223,28 +353,43 @@ async def index():
     loadCaptcha();
     
     async function checkStatus() {
-        const username = document.getElementById('username').value;
+        const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value;
-        const birth = document.getElementById('birth').value;
-        const captchaAnswer = document.getElementById('captcha-answer').value;
+        const birth = document.getElementById('birth').value.trim();
+        const captchaAnswer = document.getElementById('captcha-answer').value.trim();
         const captchaTokenVal = document.getElementById('captcha-token').value;
         const status = document.getElementById('status');
         const result = document.getElementById('result');
+        const submitBtn = document.getElementById('submit-btn');
         
-        if (!username || !password || !birth) {
+        // Clear all previous errors
+        ['username', 'password', 'birth', 'captcha'].forEach(clearError);
+        
+        // Validate all fields
+        let hasError = false;
+        
+        const usernameErr = validateUsername(username);
+        if (usernameErr) { showError('username', usernameErr); hasError = true; }
+        
+        const passwordErr = validatePassword(password);
+        if (passwordErr) { showError('password', passwordErr); hasError = true; }
+        
+        const birthErr = validateBirth(birth);
+        if (birthErr) { showError('birth', birthErr); hasError = true; }
+        
+        const captchaErr = validateCaptcha(captchaAnswer);
+        if (captchaErr) { showError('captcha', captchaErr); hasError = true; }
+        
+        if (hasError) {
             status.className = 'status error';
-            status.textContent = '⚠️ Semua field wajib diisi';
+            status.textContent = '⚠️ Mohon perbaiki input yang salah';
             return;
         }
         
-        if (!captchaAnswer) {
-            status.className = 'status error';
-            status.textContent = '⚠️ Masukkan captcha';
-            return;
-        }
-        
+        // Disable button during request
+        submitBtn.disabled = true;
         status.className = 'status loading';
-        status.textContent = '⏳ Sedang mengecek...';
+        status.textContent = '⏳ Sedang mengecek... (mungkin butuh 30-60 detik)';
         result.textContent = '';
         
         try {
@@ -265,17 +410,19 @@ async def index():
                 status.className = 'status error';
                 status.textContent = '❌ ' + data.error;
                 result.textContent = '';
-                loadCaptcha(); // Refresh captcha on error
+                loadCaptcha();
             } else {
                 status.className = 'status success';
                 status.textContent = '✅ Berhasil mengambil data';
                 result.textContent = data.formatted;
-                loadCaptcha(); // Refresh captcha after success
+                loadCaptcha();
             }
         } catch(e) {
             status.className = 'status error';
             status.textContent = '❌ Gagal: ' + e.message;
             loadCaptcha();
+        } finally {
+            submitBtn.disabled = false;
         }
     }
     </script>
@@ -296,14 +443,19 @@ async def get_captcha():
 @app.post("/api/check")
 async def check_single(req: CheckRequest):
     """Check single account with captcha verification."""
-    # Verify captcha first
+    # Validate inputs
+    validation_error = req.validate_input()
+    if validation_error:
+        return {"error": validation_error}
+
+    # Verify captcha
     if not verify_captcha(req.captcha_token, req.captcha_answer):
         return {"error": "Captcha salah! Silakan coba lagi."}
 
-    data = await get_eps_data(req.username, req.password, req.birth)
+    data = await get_eps_data(req.username.strip(), req.password, req.birth.strip())
     if "error" in data:
         return {"error": data["error"]}
-    formatted = format_result(data, req.username)
+    formatted = format_result(data, req.username.strip())
     return {"data": data, "formatted": formatted}
 
 
@@ -313,6 +465,12 @@ async def check_bulk(req: BulkCheckRequest):
     if not req.accounts:
         return {"error": "Tidak ada akun untuk dicek"}
 
+    # Validate all inputs first
+    for i, acc in enumerate(req.accounts):
+        err = acc.validate_input()
+        if err:
+            return {"error": f"Akun #{i+1}: {err}"}
+
     # Verify captcha from first account
     first = req.accounts[0]
     if not verify_captcha(first.captcha_token, first.captcha_answer):
@@ -320,12 +478,12 @@ async def check_bulk(req: BulkCheckRequest):
 
     results = []
     for acc in req.accounts:
-        data = await get_eps_data(acc.username, acc.password, acc.birth)
+        data = await get_eps_data(acc.username.strip(), acc.password, acc.birth.strip())
         if "error" in data:
-            results.append({"username": acc.username, "error": data["error"]})
+            results.append({"username": acc.username.strip(), "error": data["error"]})
         else:
-            formatted = format_result(data, acc.username)
-            results.append({"username": acc.username, "data": data, "formatted": formatted})
+            formatted = format_result(data, acc.username.strip())
+            results.append({"username": acc.username.strip(), "data": data, "formatted": formatted})
     return {"results": results}
 
 

@@ -97,13 +97,14 @@ class CheckRequest(BaseModel):
         if not self.password or len(self.password) < 4:
             return "Password minimal 4 karakter"
         if not self.birth or not re.match(r'^[0-9]{6}$', self.birth.strip()):
-            return "Format tanggal lahir harus 6 digit angka (DDMMYY)"
-        dd = int(self.birth[0:2])
+            return "Format tanggal lahir harus 6 digit angka (YYMMDD)"
+        yy = int(self.birth[0:2])
         mm = int(self.birth[2:4])
-        if dd < 1 or dd > 31:
-            return "Tanggal tidak valid (01-31)"
+        dd = int(self.birth[4:6])
         if mm < 1 or mm > 12:
             return "Bulan tidak valid (01-12)"
+        if dd < 1 or dd > 31:
+            return "Tanggal tidak valid (01-31)"
         return None
 
 
@@ -172,9 +173,9 @@ async def index():
                 <div class="field-error" id="password-error"></div>
             </div>
             <div class="form-group">
-                <label for="birth">Tanggal Lahir (DDMMYY)</label>
-                <input type="text" id="birth" placeholder="Contoh: 020290 (2 Feb 1990)" maxlength="6" pattern="[0-9]{6}" inputmode="numeric">
-                <div class="field-hint">Format: 2 digit tanggal + 2 digit bulan + 2 digit tahun (DDMMYY)</div>
+                <label for="birth">Tanggal Lahir (YYMMDD)</label>
+                <input type="text" id="birth" placeholder="Contoh: 020216 (YY=02, MM=02, DD=16)" maxlength="6" pattern="[0-9]{6}" inputmode="numeric">
+                <div class="field-hint">Format: 2 digit tahun + 2 digit bulan + 2 digit tanggal (YYMMDD)</div>
                 <div class="field-error" id="birth-error"></div>
             </div>
             <div class="form-group">
@@ -238,13 +239,12 @@ async def index():
     
     function validateBirth(val) {
         if (!val) return 'Tanggal lahir wajib diisi';
-        if (!/^[0-9]{6}$/.test(val)) return 'Format harus 6 digit angka (DDMMYY)';
-        const dd = parseInt(val.substring(0, 2));
+        if (!/^[0-9]{6}$/.test(val)) return 'Format harus 6 digit angka (YYMMDD)';
+        const yy = parseInt(val.substring(0, 2));
         const mm = parseInt(val.substring(2, 4));
-        const yy = parseInt(val.substring(4, 6));
-        if (dd < 1 || dd > 31) return 'Tanggal tidak valid (01-31)';
+        const dd = parseInt(val.substring(4, 6));
         if (mm < 1 || mm > 12) return 'Bulan tidak valid (01-12)';
-        if (yy < 0 || yy > 99) return 'Tahun tidak valid (00-99)';
+        if (dd < 1 || dd > 31) return 'Tanggal tidak valid (01-31)';
         return null;
     }
     

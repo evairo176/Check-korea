@@ -292,7 +292,7 @@ async def index():
     
     async function loadCaptcha() {
         try {
-            const resp = await fetch('/eps/api/captcha');
+            const resp = await fetch('/api/captcha');
             const data = await resp.json();
             captchaToken = data.token;
             document.getElementById('captcha-token').value = data.token;
@@ -353,7 +353,7 @@ async def index():
         result.textContent = '';
         
         try {
-            const resp = await fetch('/eps/api/check', {
+            const resp = await fetch('/api/check', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({

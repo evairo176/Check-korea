@@ -1,0 +1,11 @@
+services:
+  eps:
+    build: .
+    container_name: eps-korea
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8100:8099"
+    volumes:
+      - ./akun.txt:/app/akun.txt:ro
+    environment:
+      - PYTHONUNBUFFERED=1

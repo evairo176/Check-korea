@@ -192,7 +192,14 @@ async def index():
                 <div class="field-error" id="captcha-error"></div>
             </div>
             <div id="status"></div>
+            <div class="form-group" style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
+                <input type="checkbox" id="save-account" checked style="width:auto; margin:0;">
+                <label for="save-account" style="margin:0; color:#94a3b8; font-size:0.85rem; cursor:pointer;">
+                    💾 Simpan akun di browser (biar gak perlu input ulang)
+                </label>
+            </div>
             <button onclick="checkStatus()" id="submit-btn">🔍 Cek Status</button>
+            <button type="button" id="clear-account-btn" onclick="clearSavedAccount()" class="captcha-refresh" style="margin-left:0.5rem; font-size:0.85rem; width:auto;">🗑 Hapus akun tersimpan</button>
         </div>
         
         <div class="card">
@@ -311,7 +318,72 @@ async def index():
     
     // Load captcha on page load
     loadCaptcha();
-    
+
+    // ═══ LocalStorage — simpan akun biar gak perlu input ulang ═══
+    const STORAGE_KEY = 'eps_korea_account';
+    const saveChk = () => document.getElementById('save-account');
+
+    // Auto-fill dari localStorage saat halaman load
+    function loadSavedAccount() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) { updateClearBtn(); return; }
+            const acc = JSON.parse(raw);
+            if (acc.username) document.getElementById('username').value = acc.username;
+            if (acc.password) document.getElementById('password').value = acc.password;
+            if (acc.birth) document.getElementById('birth').value = acc.birth;
+            // Validasi nempel di atas
+            ['username','password','birth'].forEach(id => {
+                const err = document.getElementById(id)?.value.trim() ? null : 'x';
+                if (!err) { clearError(id); markValid(id); }
+            });
+            if (acc.autoCheck) checkStatus();    // auto-cek sekali kalau mau
+            updateClearBtn();
+        } catch(e) { console.warn('Gagal baca akun tersimpan:', e); }
+    }
+
+    // Simpan (atau hapus) akun ke localStorage dipicu dari checkStatus
+    function persistAccount() {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        const birth = document.getElementById('birth').value.trim();
+        try {
+            if (saveChk() && saveChk().checked && username && password && birth) {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({ username, password, birth, autoCheck:true }));
+            } else {
+                if (!(saveChk() && saveChk().checked)) localStorage.removeItem(STORAGE_KEY);
+            }
+        } catch(err) { console.warn('Gagal menyimpan akun:', err); }
+        updateClearBtn();
+    }
+
+    function clearSavedAccount() {
+        localStorage.removeItem(STORAGE_KEY);
+        document.getElementById('username').value = '';
+        document.getElementById('password').value = '';
+        document.getElementById('birth').value = '';
+        const st = document.getElementById('status');
+        st.className = 'status';
+        st.textContent = '🗑 Akun tersimpan dihapus.';
+        updateClearBtn();
+    }
+
+    function updateClearBtn() {
+        const has = !!localStorage.getItem(STORAGE_KEY);
+        document.getElementById('clear-account-btn').style.display = has ? '' : 'none';
+    }
+
+    // Toggle simpan: hapus kalau di-uncheck
+    document.addEventListener('change', function(e){
+        if (e.target && e.target.id === 'save-account' && !e.target.checked) {
+            localStorage.removeItem(STORAGE_KEY);
+            updateClearBtn();
+        }
+    });
+
+    // Auto-fill + auto-cek 1x pakai setTimeout biar captcha sempat load dulu.
+    setTimeout(loadSavedAccount, 800);
+
     async function checkStatus() {
         const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value;
@@ -382,6 +454,7 @@ async def index():
             status.textContent = '❌ Gagal: ' + e.message;
             loadCaptcha();
         } finally {
+            persistAccount();    // simpan akun ke localStorage (atau hapus kalau di-uncheck)
             submitBtn.disabled = false;
         }
     }

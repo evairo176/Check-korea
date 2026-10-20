@@ -41,11 +41,23 @@ LABEL_SHORT: list[tuple[str, str]] = [
 ]
 
 # Baca semua tabel halaman apa adanya: list of tables -> list of rows -> list of cell text.
+# Nilai di tabel EPS kadang BUKAN teks di dalam <td>, tapi value dari <input>/<textarea>
+# (innerText tidak membaca value) -> makanya di-fallback ke value form field.
 DUMP_TABLES_JS = r'''() => {
     const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const NOISE = /^fileListSize/i;
+    const cellText = (cell) => {
+        const t = clean(cell.innerText);
+        if (t) return t;
+        return Array.from(cell.querySelectorAll('input, textarea, select'))
+            .filter((e) => !NOISE.test(e.id || '') && !NOISE.test(e.name || ''))
+            .map((e) => clean(e.value !== undefined && e.value !== null ? String(e.value) : (e.getAttribute('value') || '')))
+            .filter((v) => v && v !== '0')
+            .join(' ');
+    };
     const tables = Array.from(document.querySelectorAll('table'));
     return tables.map((t) => Array.from(t.querySelectorAll('tr'))
-        .map((tr) => Array.from(tr.querySelectorAll('td, th')).map((td) => clean(td.innerText)))
+        .map((tr) => Array.from(tr.querySelectorAll('td, th')).map(cellText))
         .filter((cells) => cells.length > 0));
 }'''
 
@@ -134,7 +146,9 @@ def parse_tables(tables: list) -> dict:
                     "status": status,
                     "date": date,
                     "note": note,
-                    "done": not (_is_pending(status) or _is_pending(date)),
+                    # "ada isinya" cukup dari salah satu kolom: status ATAU tanggal.
+                    # (kalau dua-duanya kosong/- baru dianggap belum ada)
+                    "done": not (_is_pending(status) and _is_pending(date)),
                 }
                 result["milestones"].append(entry)
                 result["rowsData"].append([c for c in [label, status, date_cell] if c != ""])

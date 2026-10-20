@@ -4,9 +4,9 @@ Cek Status Pengiriman Kerja ke Korea Selatan — Web + Telegram Bot
 
 ## Features
 
-- **Web Interface** — Dark theme, responsive, captcha protected
+- **Web Interface** — Dark theme, responsive
 - **Telegram Bot** — Cek status langsung dari chat
-- **Math Captcha** — Proteksi dari bot/scraper
+- **Rate Limit per IP** — 30 request / 5 menit (matiin pakai env `RATE_LIMIT_MAX=0`)
 - **Playwright Scraper** — Auto-login ke situs EPS Korea
 - **Multi-account** — Cek satu atau banyak akun sekaligus
 
@@ -71,7 +71,6 @@ server {
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Health check |
-| GET | `/api/captcha` | Get math captcha |
 | POST | `/api/check` | Check single account |
 | POST | `/api/check/bulk` | Check multiple accounts |
 | GET | `/api/check/file` | Check all from akun.txt |

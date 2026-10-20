@@ -1,11 +1,5 @@
 """FastAPI backend for EPS Korea monitoring."""
-import json
 import os
-import io
-import asyncio
-import random
-import string
-import hashlib
 import time
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
@@ -13,79 +7,53 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from eps_scraper import get_eps_data, format_result
 
-app = FastAPI(title="EPS Korea Monitor", version="1.1.0")
+app = FastAPI(title="EPS Korea Monitor", version="1.2.0")
 
 ACCOUNTS_FILE = Path(__file__).parent / "akun.txt"
 
-# Simple in-memory captcha store: token -> {answer, created_at}
-captcha_store = {}
-CAPTCHA_TTL = 300  # 5 minutes
+# ── Rate limit per IP: pengganti proteksi lama. Set RATE_LIMIT_MAX=0 buat matiin ──
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30"))
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "300"))
+rate_hits: dict[str, list[float]] = {}
 
 
-def generate_math_captcha() -> tuple[str, str, str]:
-    """Generate a math captcha. Returns (token, question, answer)."""
-    ops = ["+", "-"]
-    op = random.choice(ops)
-    
-    if op == "+":
-        a = random.randint(1, 50)
-        b = random.randint(1, 50)
-        answer = str(a + b)
-    else:
-        a = random.randint(10, 99)
-        b = random.randint(1, a)  # Ensure non-negative result
-        answer = str(a - b)
-    
-    question = f"{a} {op} {b} = ?"
-    
-    # Create token
-    token = hashlib.sha256(f"{answer}:{time.time()}:{random.random()}".encode()).hexdigest()[:16]
-    
-    # Store answer
-    captcha_store[token] = {
-        "answer": answer,
-        "created_at": time.time()
-    }
-    
-    # Cleanup old entries
+def _client_ip(request: Request) -> str:
+    for header in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
+        value = request.headers.get(header)
+        if value:
+            return value.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_retry(request: Request, cost: int = 1) -> int:
+    """0 = boleh lanjut, >0 = detik harus tunggu."""
+    if RATE_LIMIT_MAX <= 0:
+        return 0
     now = time.time()
-    expired = [k for k, v in captcha_store.items() if now - v["created_at"] > CAPTCHA_TTL]
-    for k in expired:
-        del captcha_store[k]
-    
-    return token, question, answer
+    ip = _client_ip(request)
+    hits = [t for t in rate_hits.get(ip, []) if now - t < RATE_LIMIT_WINDOW]
+    if len(hits) + cost > RATE_LIMIT_MAX:
+        rate_hits[ip] = hits
+        return int(RATE_LIMIT_WINDOW - (now - hits[0])) + 1 if hits else RATE_LIMIT_WINDOW
+    hits.extend([now] * cost)
+    rate_hits[ip] = hits
+    if len(rate_hits) > 500:
+        for key in [k for k, v in rate_hits.items() if all(now - t >= RATE_LIMIT_WINDOW for t in v)]:
+            del rate_hits[key]
+    return 0
 
 
-def generate_captcha_token() -> tuple[str, str]:
-    """Generate math captcha and return (token, question)."""
-    token, question, answer = generate_math_captcha()
-    return token, question
-
-
-def verify_captcha(token: str, answer: str) -> bool:
-    """Verify captcha answer."""
-    if token not in captcha_store:
-        return False
-
-    stored = captcha_store[token]
-    if time.time() - stored["created_at"] > CAPTCHA_TTL:
-        del captcha_store[token]
-        return False
-
-    # Case-insensitive comparison
-    if stored["answer"] == answer.strip().lower():
-        del captcha_store[token]  # One-time use
-        return True
-
-    return False
+def _rate_limit_payload(retry_after: int) -> dict:
+    return {
+        "error": f"Terlalu banyak permintaan. Coba lagi dalam {retry_after} detik.",
+        "retryAfterSeconds": retry_after,
+    }
 
 
 class CheckRequest(BaseModel):
     username: str
     password: str
     birth: str
-    captcha_token: str
-    captcha_answer: str
 
     def validate_input(self) -> str | None:
         """Validate input fields. Returns error message or None."""
@@ -121,6 +89,7 @@ async def index():
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EPS Korea Monitor</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>KR</text></svg>">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
@@ -144,15 +113,10 @@ async def index():
         .status.loading { background: #1e3a5f; color: #60a5fa; }
         .status.success { background: #14532d; color: #4ade80; }
         .status.error { background: #7f1d1d; color: #f87171; }
-        .captcha-group { display: flex; gap: 0.5rem; align-items: center; }
-        .captcha-group input { flex: 1; }
-        .captcha-image { background: #1e293b; padding: 0.5rem; border-radius: 8px; border: 1px solid #334155; cursor: pointer; display: flex; align-items: center; justify-content: center; min-height: 50px; }
-        .captcha-image:hover { border-color: #3b82f6; }
-        .captcha-image svg { max-width: 100%; height: auto; }
-        .captcha-refresh { background: none; border: 1px solid #334155; color: #94a3b8; padding: 0.5rem 0.75rem; border-radius: 8px; cursor: pointer; font-size: 1.2rem; width: auto; }
-        .captcha-refresh:hover { background: #334155; }
+        .btn-ghost { background: none; border: 1px solid #334155; color: #94a3b8; padding: 0.5rem 0.75rem; border-radius: 8px; cursor: pointer; font-size: 1.2rem; width: auto; }
+        .btn-ghost:hover { background: #334155; }
         .input-icon { position: relative; }
-        .input-icon .validation-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%; font-size: 1.1rem; }
+        .input-icon .validation-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 1.1rem; }
     </style>
 </head>
 <body>
@@ -178,19 +142,6 @@ async def index():
                 <div class="field-hint">Format: 2 digit tahun + 2 digit bulan + 2 digit tanggal (YYMMDD)</div>
                 <div class="field-error" id="birth-error"></div>
             </div>
-            <div class="form-group">
-                <label>Captcha</label>
-                <div class="captcha-image" id="captcha-image" onclick="loadCaptcha()" title="Klik untuk refresh captcha">
-                    <span style="color:#64748b">Loading captcha...</span>
-                </div>
-                <div class="captcha-group" style="margin-top: 0.5rem;">
-                    <input type="text" id="captcha-answer" placeholder="Jawaban (contoh: 15)" maxlength="5" autocomplete="off" inputmode="numeric">
-                    <button type="button" class="captcha-refresh" onclick="loadCaptcha()" title="Refresh captcha">↻</button>
-                </div>
-                <input type="hidden" id="captcha-token" value="">
-                <div class="field-hint">Selesaikan soal matematika di atas</div>
-                <div class="field-error" id="captcha-error"></div>
-            </div>
             <div id="status"></div>
             <div class="form-group" style="display:flex; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 <input type="checkbox" id="save-account" checked style="width:auto; margin:0;">
@@ -199,7 +150,7 @@ async def index():
                 </label>
             </div>
             <button onclick="checkStatus()" id="submit-btn">🔍 Cek Status</button>
-            <button type="button" id="clear-account-btn" onclick="clearSavedAccount()" class="captcha-refresh" style="margin-left:0.5rem; font-size:0.85rem; width:auto;">🗑 Hapus akun tersimpan</button>
+            <button type="button" id="clear-account-btn" onclick="clearSavedAccount()" class="btn-ghost" style="margin-left:0.5rem; font-size:0.85rem; width:auto;">🗑 Hapus akun tersimpan</button>
         </div>
         
         <div class="card">
@@ -209,8 +160,6 @@ async def index():
     </div>
 
     <script>
-    let captchaToken = '';
-    
     // Validation helpers
     function showError(fieldId, message) {
         const el = document.getElementById(fieldId + '-error');
@@ -255,12 +204,6 @@ async def index():
         return null;
     }
     
-    function validateCaptcha(val) {
-        if (!val) return 'Jawaban captcha wajib diisi';
-        if (!/^[0-9]+$/.test(val)) return 'Jawaban harus berupa angka';
-        return null;
-    }
-    
     // Real-time validation on blur
     document.getElementById('username').addEventListener('blur', function() {
         const err = validateUsername(this.value.trim());
@@ -285,11 +228,6 @@ async def index():
         else { clearError('birth'); markValid('birth'); }
     });
     
-    document.getElementById('captcha-answer').addEventListener('input', function() {
-        // Only allow digits
-        this.value = this.value.replace(/[^0-9]/g, '');
-    });
-    
     // Allow Enter key to submit
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !document.getElementById('submit-btn').disabled) {
@@ -297,28 +235,6 @@ async def index():
         }
     });
     
-    async function loadCaptcha() {
-        try {
-            const resp = await fetch('/api/captcha');
-            const data = await resp.json();
-            captchaToken = data.token;
-            document.getElementById('captcha-token').value = data.token;
-            
-            // Show question as plain text
-            const imgContainer = document.getElementById('captcha-image');
-            imgContainer.innerHTML = '<span style="font-size:1.3rem;font-weight:bold;color:#e2e8f0;font-family:monospace">' + data.question + '</span>';
-            
-            document.getElementById('captcha-answer').value = '';
-            clearError('captcha');
-        } catch(e) {
-            console.error('Failed to load captcha:', e);
-            document.getElementById('captcha-image').innerHTML = '<span style="color:#f87171">Gagal load captcha. Klik untuk retry.</span>';
-        }
-    }
-    
-    // Load captcha on page load
-    loadCaptcha();
-
     // ═══ LocalStorage — simpan akun biar gak perlu input ulang ═══
     const STORAGE_KEY = 'eps_korea_account';
     const saveChk = () => document.getElementById('save-account');
@@ -381,21 +297,18 @@ async def index():
         }
     });
 
-    // Auto-fill + auto-cek 1x pakai setTimeout biar captcha sempat load dulu.
-    setTimeout(loadSavedAccount, 800);
+    loadSavedAccount();
 
     async function checkStatus() {
         const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value;
         const birth = document.getElementById('birth').value.trim();
-        const captchaAnswer = document.getElementById('captcha-answer').value.trim();
-        const captchaTokenVal = document.getElementById('captcha-token').value;
         const status = document.getElementById('status');
         const result = document.getElementById('result');
         const submitBtn = document.getElementById('submit-btn');
         
         // Clear all previous errors
-        ['username', 'password', 'birth', 'captcha'].forEach(clearError);
+        ['username', 'password', 'birth'].forEach(clearError);
         
         // Validate all fields
         let hasError = false;
@@ -408,9 +321,6 @@ async def index():
         
         const birthErr = validateBirth(birth);
         if (birthErr) { showError('birth', birthErr); hasError = true; }
-        
-        const captchaErr = validateCaptcha(captchaAnswer);
-        if (captchaErr) { showError('captcha', captchaErr); hasError = true; }
         
         if (hasError) {
             status.className = 'status error';
@@ -431,9 +341,7 @@ async def index():
                 body: JSON.stringify({
                     username, 
                     password, 
-                    birth,
-                    captcha_token: captchaTokenVal,
-                    captcha_answer: captchaAnswer
+                    birth
                 })
             });
             const data = await resp.json();
@@ -442,17 +350,14 @@ async def index():
                 status.className = 'status error';
                 status.textContent = '❌ ' + data.error;
                 result.textContent = '';
-                loadCaptcha();
             } else {
                 status.className = 'status success';
                 status.textContent = '✅ Berhasil mengambil data';
                 result.textContent = data.formatted;
-                loadCaptcha();
             }
         } catch(e) {
             status.className = 'status error';
             status.textContent = '❌ Gagal: ' + e.message;
-            loadCaptcha();
         } finally {
             persistAccount();    // simpan akun ke localStorage (atau hapus kalau di-uncheck)
             submitBtn.disabled = false;
@@ -464,24 +369,17 @@ async def index():
 """
 
 
-@app.get("/api/captcha")
-async def get_captcha():
-    """Generate and return a new math captcha."""
-    token, question = generate_captcha_token()
-    return {"token": token, "question": question}
-
-
 @app.post("/api/check")
-async def check_single(req: CheckRequest):
-    """Check single account with captcha verification."""
+async def check_single(req: CheckRequest, request: Request):
+    """Check single account."""
     # Validate inputs
     validation_error = req.validate_input()
     if validation_error:
         return {"error": validation_error}
 
-    # Verify captcha
-    if not verify_captcha(req.captcha_token, req.captcha_answer):
-        return {"error": "Captcha salah! Silakan coba lagi."}
+    retry_after = _rate_limit_retry(request)
+    if retry_after:
+        return _rate_limit_payload(retry_after)
 
     data = await get_eps_data(req.username.strip(), req.password, req.birth.strip())
     if "error" in data:
@@ -491,21 +389,20 @@ async def check_single(req: CheckRequest):
 
 
 @app.post("/api/check/bulk")
-async def check_bulk(req: BulkCheckRequest):
-    """Check multiple accounts (first captcha verifies all)."""
+async def check_bulk(req: BulkCheckRequest, request: Request):
+    """Check multiple accounts."""
     if not req.accounts:
         return {"error": "Tidak ada akun untuk dicek"}
+
+    retry_after = _rate_limit_retry(request, cost=len(req.accounts))
+    if retry_after:
+        return _rate_limit_payload(retry_after)
 
     # Validate all inputs first
     for i, acc in enumerate(req.accounts):
         err = acc.validate_input()
         if err:
             return {"error": f"Akun #{i+1}: {err}"}
-
-    # Verify captcha from first account
-    first = req.accounts[0]
-    if not verify_captcha(first.captcha_token, first.captcha_answer):
-        return {"error": "Captcha salah! Silakan coba lagi."}
 
     results = []
     for acc in req.accounts:
@@ -520,7 +417,7 @@ async def check_bulk(req: BulkCheckRequest):
 
 @app.get("/api/check/file")
 async def check_from_file():
-    """Check all accounts from akun.txt (no captcha for file-based)."""
+    """Check all accounts from akun.txt."""
     if not ACCOUNTS_FILE.exists():
         raise HTTPException(status_code=404, detail="akun.txt not found")
 
@@ -534,8 +431,6 @@ async def check_from_file():
                     username=parts[0],
                     password=parts[1],
                     birth=parts[2],
-                    captcha_token="",
-                    captcha_answer=""
                 ))
 
     if not accounts:
